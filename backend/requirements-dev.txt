@@ -1,0 +1,11 @@
+# Test-only dependencies. Install with:  pip install -r requirements-dev.txt
+-r requirements.txt
+
+pytest>=8.0
+pytest-asyncio>=0.24
+httpx>=0.27
+
+# Boots a throwaway PostgreSQL for the tests, so nothing needs to be installed.
+# Linux and macOS only. On Windows, set TEST_DATABASE_URL to any Postgres instead
+# (for example the one from `docker compose up db`) and pgserver is not used.
+pgserver ; sys_platform != "win32"

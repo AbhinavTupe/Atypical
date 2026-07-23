@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Orders, live</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] },
+        keyframes: {
+          flash: { '0%': { background: 'rgba(99,102,241,0.16)' }, '100%': { background: 'transparent' } },
+        },
+        animation: { flash: 'flash 1.1s ease-out' },
+      },
+    },
+  };
+</script>
+<link rel="preconnect" href="https://rsms.me/">
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css">
+<style>
+  html { scroll-behavior: smooth; }
+  .row-enter { animation: flash 1.1s ease-out; }
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen antialiased">
+
+  <div class="max-w-4xl mx-auto px-5 py-10">
+
+    <!-- Header -->
+    <header class="flex items-start justify-between gap-4 mb-8">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight text-slate-900">Orders</h1>
+        <p class="text-sm text-slate-500 mt-1 max-w-lg">
+          A live view of the <code class="text-slate-600 bg-slate-100 px-1 rounded">orders</code> table.
+          It opens one connection and never polls. Any change, from here or straight in the database,
+          shows up here on its own.
+        </p>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        <span id="conn" class="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full bg-amber-100 text-amber-700">
+          <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+          <span id="conn-text">connecting</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Toolbar -->
+    <div class="flex items-center justify-between mb-3">
+      <p class="text-sm text-slate-500"><span id="count" class="font-medium text-slate-700">0</span> orders</p>
+      <button onclick="openCreate()"
+        class="inline-flex items-center gap-1.5 text-sm font-medium bg-slate-900 text-white px-3.5 py-2 rounded-lg hover:bg-slate-700 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" d="M12 5v14M5 12h14"/></svg>
+        New order
+      </button>
+    </div>
+
+    <!-- Table -->
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs uppercase tracking-wide text-slate-400 border-b border-slate-100">
+            <th class="px-4 py-3 font-medium">ID</th>
+            <th class="px-4 py-3 font-medium">Customer</th>
+            <th class="px-4 py-3 font-medium">Product</th>
+            <th class="px-4 py-3 font-medium">Status</th>
+            <th class="px-4 py-3 font-medium">Updated</th>
+            <th class="px-4 py-3 font-medium text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="rows" class="divide-y divide-slate-100"></tbody>
+      </table>
+      <div id="empty" class="hidden text-center text-slate-400 text-sm py-14">
+        No orders yet. Add one, or insert a row in the database and watch it appear.
+      </div>
+    </div>
+
+    <p class="text-xs text-slate-400 mt-4 leading-relaxed">
+      Tip: notifications here are triggered by the database, not the button you click. Try
+      <code class="bg-slate-100 px-1 rounded">UPDATE orders SET status='delivered' WHERE id=1;</code>
+      in psql and this table still updates.
+    </p>
+  </div>
+
+  <!-- Create / edit modal -->
+  <div id="modal" class="hidden fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 p-6">
+      <h2 id="modal-title" class="text-lg font-semibold text-slate-900 mb-4">New order</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">Customer</label>
+          <input id="f-customer" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400" placeholder="Customer name" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">Product</label>
+          <input id="f-product" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400" placeholder="Product name" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-slate-500 mb-1">Status</label>
+          <select id="f-status" class="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-900/10 focus:border-slate-400">
+            <option value="pending">pending</option>
+            <option value="shipped">shipped</option>
+            <option value="delivered">delivered</option>
+          </select>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 mt-6">
+        <button onclick="closeModal()" class="text-sm font-medium px-3.5 py-2 rounded-lg text-slate-600 hover:bg-slate-100 transition">Cancel</button>
+        <button id="modal-save" onclick="saveModal()" class="text-sm font-medium px-3.5 py-2 rounded-lg bg-slate-900 text-white hover:bg-slate-700 transition">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sonner (toasts). Mounted via ES modules; falls back to a tiny toaster if the CDN is unavailable. -->
+  <script type="module">
+    try {
+      const React = (await import('https://esm.sh/react@18.3.1')).default;
+      const { createRoot } = await import('https://esm.sh/react-dom@18.3.1/client');
+      const { Toaster, toast } = await import('https://esm.sh/sonner@1.7.4?deps=react@18.3.1,react-dom@18.3.1');
+      const mount = document.createElement('div');
+      document.body.appendChild(mount);
+      createRoot(mount).render(React.createElement(Toaster, { position: 'bottom-right', richColors: true, closeButton: true }));
+      window.toast = toast;
+    } catch (e) {
+      console.warn('Sonner unavailable, using fallback toaster', e);
+    }
+  </script>
+
+  <script>
+    const API = location.origin;
+    const orders = new Map();          // id -> order row
+    let editingId = null;
+
+    // ---- tiny fallback toaster (only used if Sonner fails to load) ----------
+    function fallbackToast(msg, kind) {
+      let host = document.getElementById('fallback-toasts');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'fallback-toasts';
+        host.className = 'fixed bottom-4 right-4 z-50 flex flex-col gap-2';
+        document.body.appendChild(host);
+      }
+      const colors = { success: 'bg-emerald-600', info: 'bg-slate-800', warning: 'bg-amber-600', error: 'bg-red-600' };
+      const el = document.createElement('div');
+      el.className = `${colors[kind] || colors.info} text-white text-sm px-3.5 py-2 rounded-lg shadow-lg`;
+      el.textContent = msg;
+      host.appendChild(el);
+      setTimeout(() => el.remove(), 3500);
+    }
+    function notify(msg, kind = 'info') {
+      if (window.toast && window.toast[kind]) window.toast[kind](msg);
+      else if (window.toast) window.toast(msg);
+      else fallbackToast(msg, kind);
+    }
+
+    // ---- rendering ----------------------------------------------------------
+    const STATUS_STYLES = {
+      pending:   'bg-amber-100 text-amber-700',
+      shipped:   'bg-blue-100 text-blue-700',
+      delivered: 'bg-emerald-100 text-emerald-700',
+    };
+    const NEXT = { pending: 'shipped', shipped: 'delivered', delivered: 'pending' };
+
+    function fmtTime(ts) {
+      if (!ts) return '';
+      const d = new Date(ts);
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function render(flashId) {
+      const tbody = document.getElementById('rows');
+      const list = [...orders.values()].sort((a, b) => a.id - b.id);
+      document.getElementById('count').textContent = list.length;
+      document.getElementById('empty').classList.toggle('hidden', list.length > 0);
+
+      tbody.innerHTML = list.map(o => `
+        <tr class="${o.id === flashId ? 'row-enter' : ''} hover:bg-slate-50/60">
+          <td class="px-4 py-3 text-slate-400 tabular-nums">#${o.id}</td>
+          <td class="px-4 py-3 font-medium text-slate-800">${escapeHtml(o.customer_name)}</td>
+          <td class="px-4 py-3 text-slate-600">${escapeHtml(o.product_name)}</td>
+          <td class="px-4 py-3">
+            <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_STYLES[o.status] || 'bg-slate-100 text-slate-600'}">${o.status}</span>
+          </td>
+          <td class="px-4 py-3 text-slate-400 tabular-nums text-xs">${fmtTime(o.updated_at)}</td>
+          <td class="px-4 py-3">
+            <div class="flex items-center justify-end gap-1">
+              <button title="Advance status" onclick="advance(${o.id})" class="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+              </button>
+              <button title="Edit" onclick="openEdit(${o.id})" class="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4h-5a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-5m-1.5-9.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 8.5-8.5z"/></svg>
+              </button>
+              <button title="Delete" onclick="removeOrder(${o.id})" class="p-1.5 rounded-md text-slate-400 hover:bg-red-50 hover:text-red-600 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M6 7h12M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-7 0v11a1 1 0 001 1h6a1 1 0 001-1V7"/></svg>
+              </button>
+            </div>
+          </td>
+        </tr>`).join('');
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    // ---- applying live changes (with de-duplication) ------------------------
+    function isNewer(incoming, existing) {
+      if (!existing) return true;
+      return new Date(incoming.updated_at).getTime() >= new Date(existing.updated_at).getTime();
+    }
+
+    function applyDelta(evt) {
+      if (evt.operation === 'DELETE') {
+        if (!orders.has(evt.id)) return;
+        orders.delete(evt.id);
+        render();
+        notify(`Order #${evt.id} deleted`, 'warning');
+        return;
+      }
+      const row = evt.data;
+      if (!isNewer(row, orders.get(evt.id))) return;   // stale or duplicate, ignore
+      const isNew = !orders.has(evt.id);
+      orders.set(evt.id, row);
+      render(evt.id);
+      notify(
+        isNew ? `New order #${row.id} for ${row.customer_name}` : `Order #${row.id} is now ${row.status}`,
+        isNew ? 'success' : 'info'
+      );
+    }
+
+    function applySnapshot(list) {
+      orders.clear();
+      list.forEach(o => orders.set(o.id, o));
+      render();
+    }
+
+    // ---- the one connection -------------------------------------------------
+    function setConn(state) {
+      const pill = document.getElementById('conn');
+      const dot = document.getElementById('conn-dot');
+      const text = document.getElementById('conn-text');
+      const map = {
+        live:         ['bg-emerald-100 text-emerald-700', 'bg-emerald-500', 'live'],
+        connecting:   ['bg-amber-100 text-amber-700', 'bg-amber-500', 'connecting'],
+        reconnecting: ['bg-red-100 text-red-700', 'bg-red-500', 'reconnecting'],
+      };
+      const [cls, dotCls, label] = map[state];
+      pill.className = 'inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full ' + cls;
+      dot.className = 'w-1.5 h-1.5 rounded-full ' + dotCls;
+      text.textContent = label;
+    }
+
+    function connect() {
+      const es = new EventSource(`${API}/events`);
+      es.addEventListener('snapshot', (e) => {
+        applySnapshot(JSON.parse(e.data));
+        setConn('live');
+      });
+      es.onmessage = (e) => applyDelta(JSON.parse(e.data));
+      es.onerror = () => setConn('reconnecting');   // EventSource auto-reconnects
+    }
+
+    // ---- actions (write via REST; the UI updates from the event, not here) --
+    async function api(method, path, body) {
+      const res = await fetch(`${API}${path}`, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      if (!res.ok && res.status !== 204) {
+        notify(`Request failed (${res.status})`, 'error');
+        throw new Error(res.status);
+      }
+      return res.status === 204 ? null : res.json();
+    }
+
+    async function advance(id) {
+      const o = orders.get(id);
+      if (o) await api('PATCH', `/orders/${id}`, { status: NEXT[o.status] });
+    }
+
+    async function removeOrder(id) {
+      if (!confirm(`Delete order #${id}?`)) return;
+      await api('DELETE', `/orders/${id}`);
+    }
+
+    // ---- modal --------------------------------------------------------------
+    function openCreate() {
+      editingId = null;
+      document.getElementById('modal-title').textContent = 'New order';
+      document.getElementById('f-customer').value = '';
+      document.getElementById('f-product').value = '';
+      document.getElementById('f-status').value = 'pending';
+      document.getElementById('modal').classList.remove('hidden');
+      document.getElementById('f-customer').focus();
+    }
+
+    function openEdit(id) {
+      const o = orders.get(id);
+      if (!o) return;
+      editingId = id;
+      document.getElementById('modal-title').textContent = `Edit order #${id}`;
+      document.getElementById('f-customer').value = o.customer_name;
+      document.getElementById('f-product').value = o.product_name;
+      document.getElementById('f-status').value = o.status;
+      document.getElementById('modal').classList.remove('hidden');
+      document.getElementById('f-customer').focus();
+    }
+
+    function closeModal() { document.getElementById('modal').classList.add('hidden'); }
+
+    async function saveModal() {
+      const body = {
+        customer_name: document.getElementById('f-customer').value.trim() || 'Anonymous',
+        product_name: document.getElementById('f-product').value.trim() || 'Item',
+        status: document.getElementById('f-status').value,
+      };
+      if (editingId === null) await api('POST', '/orders', body);
+      else await api('PATCH', `/orders/${editingId}`, body);
+      closeModal();
+    }
+
+    // expose handlers used by inline onclick
+    Object.assign(window, { openCreate, openEdit, closeModal, saveModal, advance, removeOrder });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+    setConn('connecting');
+    connect();
+  </script>
+</body>
+</html>
